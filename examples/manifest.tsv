@@ -1,0 +1,2 @@
+sample_id	path	output_dir	database_dir	chr	pos	ea	oa	beta	rsid	eaf	se	p	source_ref	source_alt	delimiter
+example	study.tsv.gz	results/example	results/dbsnp-index	CHR	POS	EA	OA	BETA	RSID	EAF	SE	P	REF	ALT
