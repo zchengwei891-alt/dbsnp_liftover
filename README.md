@@ -92,7 +92,19 @@ If Python runs in a different environment, pass the UCSC executable paths with `
 
 Create a tab-delimited manifest with one row per GWAS file. Required columns are `sample_id`, `path`, `chr`, `pos`, `ea`, `oa`, and `beta`. Add `output_dir` to choose a different results directory for each sample; a relative directory is resolved from the manifest's directory. If `output_dir` is blank or absent, the command-line `--output-dir` is used as the fallback. Each sample must have a directory from one of these two sources. Optional `database_dir` names the shared directory for the two persistent BigBed lookup indexes; all rows in a manifest must resolve to the same directory. It is not needed for VCF-index conversion. For the required source lookup by REF/ALT, provide `source_ref` and `source_alt` as the names of the source allele columns whenever available. If absent, the program uses the EA/OA pair as the source allele pair, but does not use any input rsID to identify the source record. Optional `rsid`, `eaf`, `se`, and `p` columns name their input columns; `rsid` is preserved in the original row but ignored for dbSNP lookup. The optional `delimiter` field overrides detection and accepts `tab`, `comma`, or `semicolon`. `path` may be absolute or relative to the manifest. Input columns are selected by their exact header names. Plain and gzip-compressed TSV/CSV files are supported; the delimiter is detected from the header when no override is given.
 
-The output files are named `{sample_id}.lifted.tsv` and `{sample_id}.variants.tsv` inside that row's `output_dir`. Existing output files are never overwritten, and the program rejects manifests whose rows resolve to colliding output paths.
+By default, the output files are named `{sample_id}.lifted.tsv` and `{sample_id}.variants.tsv` inside that row's `output_dir`. Add `--compress-output` to either `convert` or `convert-bigbed` to write gzip-compressed `{sample_id}.lifted.tsv.gz` and `{sample_id}.variants.tsv.gz` files instead. Compression uses gzip level 1 to favor throughput while substantially reducing text-file size. Gzip-compressed TSV is a widely used interchange format and is supported by many GWAS/Post-GWAS tools, but support is not universal; confirm that downstream software accepts `.tsv.gz` before choosing it. Existing output files are never overwritten, and the program rejects manifests whose rows resolve to colliding output paths.
+
+For example:
+
+```bash
+dbsnp-liftover convert-bigbed \
+  --manifest /path/to/manifest.tsv \
+  --source-bigbed /path/to/dbSNP_GRCh38.bb \
+  --target-bigbed /path/to/dbSNP_GRCh37.bb \
+  --source-assembly GRCh38 --source-release 155 \
+  --target-assembly GRCh37 --target-release 155 \
+  --compress-output
+```
 
 See [`examples/manifest.tsv`](examples/manifest.tsv) for a template. Coordinates must be one-based. Alleles are uppercased, `chr` prefixes and mitochondrial chromosome names are canonicalized, and direct or reverse-complement source REF/ALT and EA/OA pairs are recognized. Alleles should be represented in a form that matches the dbSNP records; indel normalization beyond the snapshot's representation is not inferred.
 
@@ -109,8 +121,8 @@ The `convert` mode follows the same per-sample `output_dir` and `--output-dir` f
 
 For each manifest row, the output directory receives:
 
-- `{sample_id}.lifted.tsv`: all original columns plus `LIFTOVER_*` fields. `LIFTOVER_EA/OA` are standardized to target ALT/REF; `LIFTOVER_BETA` is direction-adjusted when needed; `LIFTOVER_EAF` is changed to `1-EAF` when the effect direction flips. Source/target assembly and dbSNP release labels are included. Original columns remain unchanged.
-- `{sample_id}.variants.tsv`: one row per unique input `(CHR, POS, EA, OA)` combination, including a stable within-file `LIFTOVER_VARIANT_ID`, mapping status, target coordinates/alleles, and source/target assembly/release labels. The row-level file carries the same ID so duplicate input rows can be traced back to the unique-variant table.
+- `{sample_id}.lifted.tsv` (or `.lifted.tsv.gz` with `--compress-output`): all original columns plus `LIFTOVER_*` fields. `LIFTOVER_EA/OA` are standardized to target ALT/REF; `LIFTOVER_BETA` is direction-adjusted when needed; `LIFTOVER_EAF` is changed to `1-EAF` when the effect direction flips. Source/target assembly and dbSNP release labels are included. Original columns remain unchanged.
+- `{sample_id}.variants.tsv` (or `.variants.tsv.gz` with `--compress-output`): one row per unique input `(CHR, POS, EA, OA)` combination, including a stable within-file `LIFTOVER_VARIANT_ID`, mapping status, target coordinates/alleles, and source/target assembly/release labels. The row-level file carries the same ID so duplicate input rows can be traced back to the unique-variant table.
 
 Typical status values include `mapped`, `mapped_flip`, `source_variant_not_found`, `source_ambiguous`, `source_allele_conflict`, `target_variant_not_found`, `target_ambiguous`, and `invalid_input`. Invalid BETA/EAF values that cannot safely be flipped are flagged as `mapped_invalid_beta`, `mapped_invalid_eaf`, or `mapped_invalid_beta_eaf`. Unmapped output fields are left blank rather than populated with guessed coordinates.
 

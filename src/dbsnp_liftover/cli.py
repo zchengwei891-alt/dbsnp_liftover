@@ -35,6 +35,11 @@ def _parser() -> argparse.ArgumentParser:
         default=256,
         help="SQLite memory-mapped read window in MiB; use 0 to disable (default: 256)",
     )
+    convert.add_argument(
+        "--compress-output",
+        action="store_true",
+        help="write .tsv.gz outputs instead of plain TSV files",
+    )
 
     bigbed = commands.add_parser(
         "convert-bigbed",
@@ -68,6 +73,11 @@ def _parser() -> argparse.ArgumentParser:
         default=256,
         help="SQLite memory-mapped read window in MiB; use 0 to disable (default: 256)",
     )
+    bigbed.add_argument(
+        "--compress-output",
+        action="store_true",
+        help="write .tsv.gz outputs instead of plain TSV files",
+    )
     bigbed.add_argument("--bigbed-to-bed", default="bigBedToBed")
     bigbed.add_argument("--bigbed-named-items", default="bigBedNamedItems")
     return parser
@@ -91,6 +101,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 args.target_index,
                 args.output_dir,
                 sqlite_mmap_size=args.sqlite_mmap_mib * 1024 * 1024,
+                compressed_output=args.compress_output,
             )
         elif args.command == "convert-bigbed":
             summaries = convert_bigbed_manifest(
@@ -107,6 +118,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 args.database_dir,
                 args.work_dir,
                 args.sqlite_mmap_mib * 1024 * 1024,
+                args.compress_output,
             )
         else:
             raise LiftoverError("unknown command: {}".format(args.command))

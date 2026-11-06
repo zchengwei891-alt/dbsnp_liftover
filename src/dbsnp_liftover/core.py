@@ -32,6 +32,12 @@ def open_text(path: Path):
     return path.open("r", encoding="utf-8", errors="replace", newline="")
 
 
+def open_output_text(path: Path):
+    if path.suffix.lower() == ".gz":
+        return gzip.open(path, "wt", compresslevel=1, encoding="utf-8", newline="")
+    return path.open("w", encoding="utf-8", newline="")
+
+
 def normalize_chrom(value: str) -> str:
     chrom = value.strip()
     if chrom.lower().startswith("chr"):
@@ -334,6 +340,7 @@ def convert_bigbed_manifest(
     database_dir: Optional[Path] = None,
     work_dir: Optional[Path] = None,
     sqlite_mmap_size: int = 256 * 1024 * 1024,
+    compressed_output: bool = False,
 ) -> List[Tuple[str, int, int]]:
     """Query BigBed by input coordinates and by rsID without materializing either file."""
     manifest_path = manifest_path.resolve()
@@ -351,7 +358,9 @@ def convert_bigbed_manifest(
 
     manifest_rows = _read_manifest(manifest_path)
     coordinates = _manifest_source_queries(manifest_path, manifest_rows)
-    sample_output_paths = _sample_output_paths(manifest_path, manifest_rows, output_dir)
+    sample_output_paths = _sample_output_paths(
+        manifest_path, manifest_rows, output_dir, compressed_output
+    )
     database_output_paths = _database_output_paths(
         manifest_path, manifest_rows, database_dir
     )
@@ -454,6 +463,7 @@ def convert_bigbed_manifest(
             target_db_path,
             output_dir,
             sqlite_mmap_size=sqlite_mmap_size,
+            compressed_output=compressed_output,
         )
 
 
@@ -492,8 +502,10 @@ def _sample_output_paths(
     manifest_path: Path,
     manifest_rows: List[Dict[str, str]],
     default_output_dir: Optional[Path],
+    compressed_output: bool = False,
 ) -> List[Tuple[Path, Path]]:
     resolved_default = default_output_dir.resolve() if default_output_dir is not None else None
+    suffix = ".tsv.gz" if compressed_output else ".tsv"
     paths = []
     for row in manifest_rows:
         configured_dir = (row.get("output_dir") or "").strip()
@@ -512,8 +524,8 @@ def _sample_output_paths(
             )
         paths.append(
             (
-                sample_dir / "{}.lifted.tsv".format(row["sample_id"]),
-                sample_dir / "{}.variants.tsv".format(row["sample_id"]),
+                sample_dir / "{}.lifted{}".format(row["sample_id"], suffix),
+                sample_dir / "{}.variants{}".format(row["sample_id"], suffix),
             )
         )
 
@@ -784,6 +796,7 @@ def convert_manifest(
     target_index_path: Path,
     output_dir: Optional[Path],
     sqlite_mmap_size: int = 256 * 1024 * 1024,
+    compressed_output: bool = False,
 ) -> List[Tuple[str, int, int]]:
     manifest_path = manifest_path.resolve()
     source_index_path = source_index_path.resolve()
@@ -798,7 +811,9 @@ def convert_manifest(
         raise LiftoverError("SQLite mmap size must be zero or a positive byte count")
 
     manifest_rows = _read_manifest(manifest_path)
-    sample_output_paths = _sample_output_paths(manifest_path, manifest_rows, output_dir)
+    sample_output_paths = _sample_output_paths(
+        manifest_path, manifest_rows, output_dir, compressed_output
+    )
     input_paths = []
     for row in manifest_rows:
         input_path = Path(row["path"])
@@ -911,7 +926,7 @@ def convert_manifest(
                     key: "V{:08d}".format(number)
                     for number, key in enumerate(source_rows, start=1)
                 }
-                with lifted_path.open("w", encoding="utf-8", newline="") as lifted_handle:
+                with open_output_text(lifted_path) as lifted_handle:
                     writer = csv.DictWriter(
                         lifted_handle, fieldnames=output_columns, delimiter="\t", lineterminator="\n"
                     )
@@ -960,7 +975,7 @@ def convert_manifest(
                             mapped["LIFTOVER_EAF"] = ""
                         writer.writerow({**input_row, **mapped})
 
-                with variants_path.open("w", encoding="utf-8", newline="") as variants_handle:
+                with open_output_text(variants_path) as variants_handle:
                     writer = csv.DictWriter(
                         variants_handle, fieldnames=VARIANT_FIELDS, delimiter="\t", lineterminator="\n"
                     )

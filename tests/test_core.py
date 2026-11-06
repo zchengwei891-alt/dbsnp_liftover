@@ -73,6 +73,46 @@ class LiftoverPipelineTests(unittest.TestCase):
                 variants = list(csv.DictReader(handle, delimiter="\t"))
             self.assertEqual(len(variants), 1)
 
+    def test_compressed_outputs_are_gzip_tsv_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_vcf, target_vcf = root / "source.vcf", root / "target.vcf"
+            row = ["1", "5", "rs1", "A", "C", ".", ".", "."]
+            self._write_vcf(source_vcf, [row])
+            self._write_vcf(target_vcf, [["1", "8", "rs1", "A", "C", ".", ".", "."]])
+            source_db, target_db = root / "s.sqlite", root / "t.sqlite"
+            build_index(source_vcf, source_db, "buildA", "1")
+            build_index(target_vcf, target_db, "buildB", "1")
+
+            (root / "input.tsv").write_text(
+                "CHR\tPOS\tEA\tOA\tBETA\n1\t5\tC\tA\t0.2\n", encoding="utf-8"
+            )
+            manifest = root / "manifest.tsv"
+            manifest.write_text(
+                "sample_id\tpath\tchr\tpos\tea\toa\tbeta\n"
+                "study\tinput.tsv\tCHR\tPOS\tEA\tOA\tBETA\n",
+                encoding="utf-8",
+            )
+            output = root / "out"
+
+            summary = convert_manifest(
+                manifest, source_db, target_db, output, compressed_output=True
+            )
+
+            self.assertEqual(summary, [("study", 1, 1)])
+            lifted = output / "study.lifted.tsv.gz"
+            variants = output / "study.variants.tsv.gz"
+            self.assertTrue(lifted.is_file())
+            self.assertTrue(variants.is_file())
+            self.assertFalse((output / "study.lifted.tsv").exists())
+            self.assertFalse((output / "study.variants.tsv").exists())
+            with gzip.open(lifted, "rt", encoding="utf-8") as handle:
+                lifted_rows = list(csv.DictReader(handle, delimiter="\t"))
+            with gzip.open(variants, "rt", encoding="utf-8") as handle:
+                variant_rows = list(csv.DictReader(handle, delimiter="\t"))
+            self.assertEqual(lifted_rows[0]["LIFTOVER_STATUS"], "mapped")
+            self.assertEqual(len(variant_rows), 1)
+
     def test_target_missing_and_ambiguous_records_are_not_guessed(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
