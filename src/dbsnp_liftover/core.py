@@ -13,6 +13,11 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
+PRIMARY_CHROMOSOMES = frozenset(
+    [str(number) for number in range(1, 23)] + ["X", "Y", "MT"]
+)
+
+
 class LiftoverError(ValueError):
     """Raised when an input, index, or mapping is invalid."""
 
@@ -49,6 +54,10 @@ def normalize_chrom(value: str) -> str:
     if chrom.isdigit():
         return str(int(chrom))
     return chrom.upper()
+
+
+def is_primary_chromosome(chrom: str) -> bool:
+    return chrom in PRIMARY_CHROMOSOMES
 
 
 def normalize_allele(value: str) -> str:
@@ -341,6 +350,8 @@ def convert_bigbed_manifest(
     work_dir: Optional[Path] = None,
     sqlite_mmap_size: int = 256 * 1024 * 1024,
     compressed_output: bool = False,
+    prefer_unique_primary: bool = False,
+    allow_partial_source_rsids: bool = False,
 ) -> List[Tuple[str, int, int]]:
     """Query BigBed by input coordinates and by rsID without materializing either file."""
     manifest_path = manifest_path.resolve()
@@ -464,6 +475,8 @@ def convert_bigbed_manifest(
             output_dir,
             sqlite_mmap_size=sqlite_mmap_size,
             compressed_output=compressed_output,
+            prefer_unique_primary=prefer_unique_primary,
+            allow_partial_source_rsids=allow_partial_source_rsids,
         )
 
 
@@ -503,7 +516,7 @@ def _sample_output_paths(
     manifest_rows: List[Dict[str, str]],
     default_output_dir: Optional[Path],
     compressed_output: bool = False,
-) -> List[Tuple[Path, Path]]:
+) -> List[Tuple[Path, Path, Path]]:
     resolved_default = default_output_dir.resolve() if default_output_dir is not None else None
     suffix = ".tsv.gz" if compressed_output else ".tsv"
     paths = []
@@ -526,6 +539,7 @@ def _sample_output_paths(
             (
                 sample_dir / "{}.lifted{}".format(row["sample_id"], suffix),
                 sample_dir / "{}.variants{}".format(row["sample_id"], suffix),
+                sample_dir / "{}.unmapped{}".format(row["sample_id"], suffix),
             )
         )
 
@@ -636,7 +650,7 @@ def _canonical_variant_key(
         return "INVALID:" + chrom_value.strip(), pos_value.strip(), ea_value.strip(), oa_value.strip()
 
 
-def _find_source_variant(
+def _find_source_variants(
     connection: sqlite3.Connection,
     chrom: str,
     pos: int,
@@ -644,7 +658,7 @@ def _find_source_variant(
     oa: str,
     source_ref: str,
     source_alt: str,
-) -> Tuple[str, Optional[Variant], Optional[bool]]:
+) -> List[Tuple[Variant, bool]]:
     records = connection.execute(
         "SELECT rsid, ref, alt FROM variants WHERE chrom = ? AND pos = ?",
         (chrom, pos),
@@ -663,17 +677,17 @@ def _find_source_variant(
         effect_is_alt = input_effect_is_source_alt(ea, oa, ref, alt)
         if effect_is_alt is not None:
             matches.append((rsid, ref, alt, effect_is_alt))
-    unique = {(item[0], item[1], item[2], item[3]) for item in matches}
-    if not unique:
-        return "source_variant_not_found", None, None
-    if len(unique) != 1:
-        return "source_ambiguous", None, None
-    rsid, ref, alt, effect_is_alt = next(iter(unique))
-    return "matched", Variant(chrom, pos, rsid, ref, alt), effect_is_alt
+    unique = sorted(set(matches))
+    return [
+        (Variant(chrom, pos, rsid, ref, alt), effect_is_alt)
+        for rsid, ref, alt, effect_is_alt in unique
+    ]
 
 
 def _find_target_variant(
-    connection: sqlite3.Connection, source: Variant
+    connection: sqlite3.Connection,
+    source: Variant,
+    prefer_unique_primary: bool = False,
 ) -> Tuple[str, Optional[Variant], Optional[bool]]:
     rows = connection.execute(
         "SELECT chrom, pos, ref, alt FROM variants WHERE rsid = ?",
@@ -686,6 +700,12 @@ def _find_target_variant(
             candidates.add((chrom, pos, ref, alt, same_direction))
     if not candidates:
         return "target_variant_not_found", None, None
+    if prefer_unique_primary and len(candidates) > 1:
+        primary_candidates = {
+            candidate for candidate in candidates if is_primary_chromosome(candidate[0])
+        }
+        if len(primary_candidates) == 1:
+            candidates = primary_candidates
     if len(candidates) != 1:
         return "target_ambiguous", None, None
     chrom, pos, ref, alt, same_direction = next(iter(candidates))
@@ -744,6 +764,8 @@ def _map_unique_variant(
     oa_value: str,
     source_ref_value: str = "",
     source_alt_value: str = "",
+    prefer_unique_primary: bool = False,
+    allow_partial_source_rsids: bool = False,
 ) -> Dict[str, str]:
     result = {field: "" for field in OUTPUT_FIELDS}
     try:
@@ -761,17 +783,92 @@ def _map_unique_variant(
         result["LIFTOVER_NOTE"] = str(exc)
         return result
     result["LIFTOVER_EA"], result["LIFTOVER_OA"] = ea, oa
-    source_status, source, effect_is_source_alt = _find_source_variant(
+    source_candidates = _find_source_variants(
         source_db, chrom, pos, ea, oa, source_ref, source_alt
     )
-    if source_status != "matched" or source is None or effect_is_source_alt is None:
-        result["LIFTOVER_STATUS"] = source_status
+    if not source_candidates:
+        result["LIFTOVER_STATUS"] = "source_variant_not_found"
         return result
-    result["LIFTOVER_RSID"] = source.rsid
-    target_status, target, same_direction = _find_target_variant(target_db, source)
-    result["LIFTOVER_STATUS"] = target_status
-    if target is None or same_direction is None:
-        return result
+    if len(source_candidates) == 1:
+        source, effect_is_source_alt = source_candidates[0]
+        result["LIFTOVER_RSID"] = source.rsid
+        target_status, target, same_direction = _find_target_variant(
+            target_db, source, prefer_unique_primary
+        )
+        result["LIFTOVER_STATUS"] = target_status
+        if target is None or same_direction is None:
+            return result
+    else:
+        candidate_rsids = sorted({source.rsid for source, _ in source_candidates})
+        if not allow_partial_source_rsids:
+            result["LIFTOVER_STATUS"] = "source_ambiguous"
+            result["LIFTOVER_NOTE"] = (
+                "multiple source rsIDs matched; enable partial source rsID resolution "
+                "to compare their target mappings: {}".format(";".join(candidate_rsids))
+            )
+            return result
+
+        resolved = []
+        unmapped_source_rsids = []
+        ambiguous_target_rsids = []
+        for source, effect_is_alt in source_candidates:
+            target_status, target, same_direction = _find_target_variant(
+                target_db, source, prefer_unique_primary
+            )
+            if target_status == "target_variant_not_found":
+                unmapped_source_rsids.append(source.rsid)
+                continue
+            if target_status != "mapped" or target is None or same_direction is None:
+                ambiguous_target_rsids.append(source.rsid)
+                continue
+            flip = effect_is_alt != same_direction
+            resolved.append(
+                (
+                    source.rsid,
+                    target,
+                    effect_is_alt,
+                    same_direction,
+                    flip,
+                )
+            )
+        signatures = {
+            (
+                target.chrom,
+                target.pos,
+                target.ref,
+                target.alt,
+                same_direction,
+                flip,
+            )
+            for _, target, _, same_direction, flip in resolved
+        }
+        unresolved_candidates = len(resolved) != len(source_candidates)
+        can_ignore_missing = (
+            bool(resolved)
+            and not ambiguous_target_rsids
+            and len(resolved) + len(unmapped_source_rsids) == len(source_candidates)
+        )
+        if (
+            not resolved
+            or len(signatures) != 1
+            or (unresolved_candidates and not can_ignore_missing)
+        ):
+            result["LIFTOVER_STATUS"] = "source_ambiguous"
+            result["LIFTOVER_NOTE"] = (
+                "candidate source rsIDs do not resolve to one agreed target variant "
+                "and effect direction: {}".format(";".join(candidate_rsids))
+            )
+            return result
+        _, target, effect_is_source_alt, same_direction, _ = resolved[0]
+        result["LIFTOVER_RSID"] = ";".join(candidate_rsids)
+        note = "candidate source rsIDs resolve consistently: {}".format(
+            ";".join(candidate_rsids)
+        )
+        if unmapped_source_rsids:
+            note += "; no compatible target mapping for: {}".format(
+                ";".join(sorted(set(unmapped_source_rsids)))
+            )
+        result["LIFTOVER_NOTE"] = note
 
     flip = effect_is_source_alt != same_direction
     result.update(
@@ -797,6 +894,8 @@ def convert_manifest(
     output_dir: Optional[Path],
     sqlite_mmap_size: int = 256 * 1024 * 1024,
     compressed_output: bool = False,
+    prefer_unique_primary: bool = False,
+    allow_partial_source_rsids: bool = False,
 ) -> List[Tuple[str, int, int]]:
     manifest_path = manifest_path.resolve()
     source_index_path = source_index_path.resolve()
@@ -840,9 +939,10 @@ def convert_manifest(
         for row, input_path, output_paths in zip(
             manifest_rows, input_paths, sample_output_paths
         ):
-            lifted_path, variants_path = output_paths
+            lifted_path, variants_path, unmapped_path = output_paths
             lifted_path.parent.mkdir(parents=True, exist_ok=True)
             variants_path.parent.mkdir(parents=True, exist_ok=True)
+            unmapped_path.parent.mkdir(parents=True, exist_ok=True)
             handle, delimiter = _open_table(input_path, (row.get("delimiter") or "").strip())
             try:
                 reader = csv.DictReader(handle, delimiter=delimiter)
@@ -909,6 +1009,8 @@ def convert_manifest(
                             key[3],
                             source_ref,
                             source_alt,
+                            prefer_unique_primary,
+                            allow_partial_source_rsids,
                         )
                     source_rows[key].update(
                         {
@@ -926,11 +1028,20 @@ def convert_manifest(
                     key: "V{:08d}".format(number)
                     for number, key in enumerate(source_rows, start=1)
                 }
-                with open_output_text(lifted_path) as lifted_handle:
+                with open_output_text(lifted_path) as lifted_handle, open_output_text(
+                    unmapped_path
+                ) as unmapped_handle:
                     writer = csv.DictWriter(
                         lifted_handle, fieldnames=output_columns, delimiter="\t", lineterminator="\n"
                     )
+                    unmapped_writer = csv.DictWriter(
+                        unmapped_handle,
+                        fieldnames=output_columns,
+                        delimiter="\t",
+                        lineterminator="\n",
+                    )
                     writer.writeheader()
+                    unmapped_writer.writeheader()
                     handle.seek(0)
                     reader = csv.DictReader(handle, delimiter=delimiter)
                     for input_row in reader:
@@ -973,7 +1084,10 @@ def convert_manifest(
                         else:
                             mapped["LIFTOVER_BETA"] = ""
                             mapped["LIFTOVER_EAF"] = ""
-                        writer.writerow({**input_row, **mapped})
+                        output_row = {**input_row, **mapped}
+                        writer.writerow(output_row)
+                        if not mapped["LIFTOVER_STATUS"].startswith("mapped"):
+                            unmapped_writer.writerow(output_row)
 
                 with open_output_text(variants_path) as variants_handle:
                     writer = csv.DictWriter(

@@ -72,6 +72,8 @@ class LiftoverPipelineTests(unittest.TestCase):
             with (output / "study.variants.tsv").open(encoding="utf-8") as handle:
                 variants = list(csv.DictReader(handle, delimiter="\t"))
             self.assertEqual(len(variants), 1)
+            with (output / "study.unmapped.tsv").open(encoding="utf-8") as handle:
+                self.assertEqual(list(csv.DictReader(handle, delimiter="\t")), [])
 
     def test_compressed_outputs_are_gzip_tsv_files(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -110,8 +112,11 @@ class LiftoverPipelineTests(unittest.TestCase):
                 lifted_rows = list(csv.DictReader(handle, delimiter="\t"))
             with gzip.open(variants, "rt", encoding="utf-8") as handle:
                 variant_rows = list(csv.DictReader(handle, delimiter="\t"))
+            with gzip.open(output / "study.unmapped.tsv.gz", "rt", encoding="utf-8") as handle:
+                unmapped_rows = list(csv.DictReader(handle, delimiter="\t"))
             self.assertEqual(lifted_rows[0]["LIFTOVER_STATUS"], "mapped")
             self.assertEqual(len(variant_rows), 1)
+            self.assertEqual(unmapped_rows, [])
 
     def test_target_missing_and_ambiguous_records_are_not_guessed(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -140,10 +145,219 @@ class LiftoverPipelineTests(unittest.TestCase):
                 "x\tinput.tsv\tC\tP\tE\tO\tB\n",
                 encoding="utf-8",
             )
-            convert_manifest(manifest, source_db, target_db, root / "out")
+            convert_manifest(
+                manifest,
+                source_db,
+                target_db,
+                root / "out",
+                prefer_unique_primary=True,
+            )
             with (root / "out" / "x.lifted.tsv").open(encoding="utf-8") as handle:
                 row = next(csv.DictReader(handle, delimiter="\t"))
             self.assertEqual(row["LIFTOVER_STATUS"], "target_ambiguous")
+            with (root / "out" / "x.unmapped.tsv").open(encoding="utf-8") as handle:
+                unmapped_rows = list(csv.DictReader(handle, delimiter="\t"))
+            self.assertEqual(len(unmapped_rows), 1)
+            self.assertEqual(unmapped_rows[0]["LIFTOVER_STATUS"], "target_ambiguous")
+
+    def test_primary_target_chromosome_is_preferred_over_alt_contig(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_vcf, target_vcf = root / "source.vcf", root / "target.vcf"
+            row = ["1", "5", "rs1", "A", "C", ".", ".", "."]
+            self._write_vcf(source_vcf, [row])
+            self._write_vcf(
+                target_vcf,
+                [
+                    ["1", "8", "rs1", "A", "C", ".", ".", "."],
+                    ["1_KI270706V1_RANDOM", "8", "rs1", "A", "C", ".", ".", "."],
+                ],
+            )
+            source_db, target_db = root / "s.sqlite", root / "t.sqlite"
+            build_index(source_vcf, source_db, "buildA", "1")
+            build_index(target_vcf, target_db, "buildB", "1")
+            (root / "input.tsv").write_text(
+                "CHR\tPOS\tEA\tOA\tBETA\n1\t5\tC\tA\t0.2\n", encoding="utf-8"
+            )
+            manifest = root / "manifest.tsv"
+            manifest.write_text(
+                "sample_id\tpath\tchr\tpos\tea\toa\tbeta\n"
+                "x\tinput.tsv\tCHR\tPOS\tEA\tOA\tBETA\n",
+                encoding="utf-8",
+            )
+
+            convert_manifest(manifest, source_db, target_db, root / "strict")
+            with (root / "strict" / "x.lifted.tsv").open(encoding="utf-8") as handle:
+                strict_result = next(csv.DictReader(handle, delimiter="\t"))
+            self.assertEqual(strict_result["LIFTOVER_STATUS"], "target_ambiguous")
+
+            convert_manifest(
+                manifest,
+                source_db,
+                target_db,
+                root / "preferred",
+                prefer_unique_primary=True,
+            )
+            with (root / "preferred" / "x.lifted.tsv").open(encoding="utf-8") as handle:
+                result = next(csv.DictReader(handle, delimiter="\t"))
+            self.assertEqual(result["LIFTOVER_STATUS"], "mapped")
+            self.assertEqual(result["LIFTOVER_CHR"], "1")
+            self.assertEqual(result["LIFTOVER_POS"], "8")
+
+    def test_source_rsids_are_merged_when_target_mapping_and_direction_agree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_vcf, target_vcf = root / "source.vcf", root / "target.vcf"
+            self._write_vcf(
+                source_vcf,
+                [
+                    ["1", "5", "rs1", "A", "C", ".", ".", "."],
+                    ["1", "5", "rs2", "A", "C", ".", ".", "."],
+                ],
+            )
+            self._write_vcf(
+                target_vcf,
+                [
+                    ["1", "8", "rs1", "A", "C", ".", ".", "."],
+                    ["1", "8", "rs2", "A", "C", ".", ".", "."],
+                ],
+            )
+            source_db, target_db = root / "s.sqlite", root / "t.sqlite"
+            build_index(source_vcf, source_db, "buildA", "1")
+            build_index(target_vcf, target_db, "buildB", "1")
+            (root / "input.tsv").write_text(
+                "CHR\tPOS\tEA\tOA\tBETA\n1\t5\tC\tA\t0.2\n", encoding="utf-8"
+            )
+            manifest = root / "manifest.tsv"
+            manifest.write_text(
+                "sample_id\tpath\tchr\tpos\tea\toa\tbeta\n"
+                "x\tinput.tsv\tCHR\tPOS\tEA\tOA\tBETA\n",
+                encoding="utf-8",
+            )
+
+            convert_manifest(manifest, source_db, target_db, root / "out")
+
+            with (root / "out" / "x.lifted.tsv").open(encoding="utf-8") as handle:
+                result = next(csv.DictReader(handle, delimiter="\t"))
+            self.assertEqual(result["LIFTOVER_STATUS"], "source_ambiguous")
+
+            (root / "out" / "x.lifted.tsv").unlink()
+            (root / "out" / "x.variants.tsv").unlink()
+            (root / "out" / "x.unmapped.tsv").unlink()
+            convert_manifest(
+                manifest,
+                source_db,
+                target_db,
+                root / "out",
+                allow_partial_source_rsids=True,
+            )
+
+            with (root / "out" / "x.lifted.tsv").open(encoding="utf-8") as handle:
+                result = next(csv.DictReader(handle, delimiter="\t"))
+            self.assertEqual(result["LIFTOVER_STATUS"], "mapped")
+            self.assertEqual(result["LIFTOVER_RSID"], "rs1;rs2")
+            self.assertEqual(result["LIFTOVER_CHR"], "1")
+            self.assertEqual(result["LIFTOVER_POS"], "8")
+            self.assertIn("resolve consistently", result["LIFTOVER_NOTE"])
+            with (root / "out" / "x.unmapped.tsv").open(encoding="utf-8") as handle:
+                self.assertEqual(list(csv.DictReader(handle, delimiter="\t")), [])
+
+    def test_partial_source_rsids_can_resolve_when_missing_candidate_has_no_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_vcf, target_vcf = root / "source.vcf", root / "target.vcf"
+            self._write_vcf(
+                source_vcf,
+                [
+                    ["1", "5", "rs1", "A", "C", ".", ".", "."],
+                    ["1", "5", "rs2", "A", "C", ".", ".", "."],
+                ],
+            )
+            self._write_vcf(target_vcf, [["1", "8", "rs1", "A", "C", ".", ".", "."]])
+            source_db, target_db = root / "s.sqlite", root / "t.sqlite"
+            build_index(source_vcf, source_db, "buildA", "1")
+            build_index(target_vcf, target_db, "buildB", "1")
+            (root / "input.tsv").write_text(
+                "CHR\tPOS\tEA\tOA\tBETA\n1\t5\tC\tA\t0.2\n", encoding="utf-8"
+            )
+            manifest = root / "manifest.tsv"
+            manifest.write_text(
+                "sample_id\tpath\tchr\tpos\tea\toa\tbeta\n"
+                "x\tinput.tsv\tCHR\tPOS\tEA\tOA\tBETA\n",
+                encoding="utf-8",
+            )
+
+            convert_manifest(
+                manifest,
+                source_db,
+                target_db,
+                root / "strict",
+            )
+            with (root / "strict" / "x.lifted.tsv").open(encoding="utf-8") as handle:
+                strict_result = next(csv.DictReader(handle, delimiter="\t"))
+            self.assertEqual(strict_result["LIFTOVER_STATUS"], "source_ambiguous")
+
+            convert_manifest(
+                manifest,
+                source_db,
+                target_db,
+                root / "partial",
+                allow_partial_source_rsids=True,
+            )
+            with (root / "partial" / "x.lifted.tsv").open(encoding="utf-8") as handle:
+                partial_result = next(csv.DictReader(handle, delimiter="\t"))
+            self.assertEqual(partial_result["LIFTOVER_STATUS"], "mapped")
+            self.assertEqual(partial_result["LIFTOVER_RSID"], "rs1;rs2")
+            self.assertEqual(partial_result["LIFTOVER_POS"], "8")
+            self.assertIn("no compatible target mapping for: rs2", partial_result["LIFTOVER_NOTE"])
+
+    def test_source_rsids_with_different_target_mappings_remain_ambiguous(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_vcf, target_vcf = root / "source.vcf", root / "target.vcf"
+            self._write_vcf(
+                source_vcf,
+                [
+                    ["1", "5", "rs1", "A", "C", ".", ".", "."],
+                    ["1", "5", "rs2", "A", "C", ".", ".", "."],
+                ],
+            )
+            self._write_vcf(
+                target_vcf,
+                [
+                    ["1", "8", "rs1", "A", "C", ".", ".", "."],
+                    ["1", "9", "rs2", "A", "C", ".", ".", "."],
+                ],
+            )
+            source_db, target_db = root / "s.sqlite", root / "t.sqlite"
+            build_index(source_vcf, source_db, "buildA", "1")
+            build_index(target_vcf, target_db, "buildB", "1")
+            (root / "input.tsv").write_text(
+                "CHR\tPOS\tEA\tOA\tBETA\n1\t5\tC\tA\t0.2\n", encoding="utf-8"
+            )
+            manifest = root / "manifest.tsv"
+            manifest.write_text(
+                "sample_id\tpath\tchr\tpos\tea\toa\tbeta\n"
+                "x\tinput.tsv\tCHR\tPOS\tEA\tOA\tBETA\n",
+                encoding="utf-8",
+            )
+
+            convert_manifest(
+                manifest,
+                source_db,
+                target_db,
+                root / "out",
+                allow_partial_source_rsids=True,
+            )
+
+            with (root / "out" / "x.lifted.tsv").open(encoding="utf-8") as handle:
+                result = next(csv.DictReader(handle, delimiter="\t"))
+            self.assertEqual(result["LIFTOVER_STATUS"], "source_ambiguous")
+            self.assertEqual(result["LIFTOVER_CHR"], "")
+            self.assertIn("rs1;rs2", result["LIFTOVER_NOTE"])
+            with (root / "out" / "x.unmapped.tsv").open(encoding="utf-8") as handle:
+                unmapped = next(csv.DictReader(handle, delimiter="\t"))
+            self.assertEqual(unmapped["LIFTOVER_STATUS"], "source_ambiguous")
 
     def test_input_rsid_is_not_used_to_identify_source_variant(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -290,6 +504,7 @@ class LiftoverPipelineTests(unittest.TestCase):
 
                 (root / "results" / "sample.lifted.tsv").unlink()
                 (root / "results" / "sample.variants.tsv").unlink()
+                (root / "results" / "sample.unmapped.tsv").unlink()
                 with self.assertRaisesRegex(LiftoverError, "existing database files"):
                     convert_bigbed_manifest(
                         manifest,

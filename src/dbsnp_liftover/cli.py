@@ -40,6 +40,16 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="write .tsv.gz outputs instead of plain TSV files",
     )
+    convert.add_argument(
+        "--prefer-unique-primary",
+        action="store_true",
+        help="resolve multiple target matches when exactly one compatible candidate is on a primary chromosome",
+    )
+    convert.add_argument(
+        "--allow-partial-source-rsids",
+        action="store_true",
+        help="allow consistent mapped source rsIDs when other candidates have no compatible target mapping",
+    )
 
     bigbed = commands.add_parser(
         "convert-bigbed",
@@ -78,6 +88,16 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="write .tsv.gz outputs instead of plain TSV files",
     )
+    bigbed.add_argument(
+        "--prefer-unique-primary",
+        action="store_true",
+        help="resolve multiple target matches when exactly one compatible candidate is on a primary chromosome",
+    )
+    bigbed.add_argument(
+        "--allow-partial-source-rsids",
+        action="store_true",
+        help="allow consistent mapped source rsIDs when other candidates have no compatible target mapping",
+    )
     bigbed.add_argument("--bigbed-to-bed", default="bigBedToBed")
     bigbed.add_argument("--bigbed-named-items", default="bigBedNamedItems")
     return parser
@@ -102,6 +122,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 args.output_dir,
                 sqlite_mmap_size=args.sqlite_mmap_mib * 1024 * 1024,
                 compressed_output=args.compress_output,
+                prefer_unique_primary=args.prefer_unique_primary,
+                allow_partial_source_rsids=args.allow_partial_source_rsids,
             )
         elif args.command == "convert-bigbed":
             summaries = convert_bigbed_manifest(
@@ -119,6 +141,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 args.work_dir,
                 args.sqlite_mmap_mib * 1024 * 1024,
                 args.compress_output,
+                args.prefer_unique_primary,
+                args.allow_partial_source_rsids,
             )
         else:
             raise LiftoverError("unknown command: {}".format(args.command))
