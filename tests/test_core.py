@@ -446,6 +446,56 @@ class LiftoverPipelineTests(unittest.TestCase):
             self.assertEqual(result["LIFTOVER_STATUS"], "mapped")
             self.assertEqual(result["LIFTOVER_RSID"], "rs1")
 
+    def test_convert_manifest_closes_connections_after_success_and_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_vcf, target_vcf = root / "source.vcf", root / "target.vcf"
+            row = ["1", "5", "rs1", "A", "C", ".", ".", "."]
+            self._write_vcf(source_vcf, [row])
+            self._write_vcf(target_vcf, [["1", "8", "rs1", "A", "C", ".", ".", "."]])
+            source_db, target_db = root / "s.sqlite", root / "t.sqlite"
+            build_index(source_vcf, source_db, "buildA", "1")
+            build_index(target_vcf, target_db, "buildB", "1")
+            (root / "input.tsv").write_text(
+                "CHR\tPOS\tEA\tOA\tBETA\n1\t5\tC\tA\t0.2\n", encoding="utf-8"
+            )
+            manifest = root / "manifest.tsv"
+            manifest.write_text(
+                "sample_id\tpath\tchr\tpos\tea\toa\tbeta\n"
+                "study\tinput.tsv\tCHR\tPOS\tEA\tOA\tBETA\n",
+                encoding="utf-8",
+            )
+
+            real_connect = sqlite3.connect
+            connections = []
+
+            def tracking_connect(*args, **kwargs):
+                connection = real_connect(*args, **kwargs)
+                connections.append(connection)
+                return connection
+
+            with patch("dbsnp_liftover.core.sqlite3.connect", side_effect=tracking_connect):
+                convert_manifest(manifest, source_db, target_db, root / "out")
+                self.assertEqual(len(connections), 2)
+                for connection in connections:
+                    with self.assertRaisesRegex(sqlite3.ProgrammingError, "closed database"):
+                        connection.execute("SELECT 1")
+
+                bad_manifest = root / "bad_manifest.tsv"
+                bad_manifest.write_text(
+                    "sample_id\tpath\tchr\tpos\tea\toa\tbeta\n"
+                    "study\tinput.tsv\tMISSING\tPOS\tEA\tOA\tBETA\n",
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(LiftoverError, "column 'MISSING'"):
+                    convert_manifest(
+                        bad_manifest, source_db, target_db, root / "error_out"
+                    )
+                self.assertEqual(len(connections), 4)
+                for connection in connections[2:]:
+                    with self.assertRaisesRegex(sqlite3.ProgrammingError, "closed database"):
+                        connection.execute("SELECT 1")
+
     def test_bigbed_indexes_can_be_persisted_and_use_a_scratch_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -475,7 +525,17 @@ class LiftoverPipelineTests(unittest.TestCase):
                 else:
                     result_path.write_text(row, encoding="utf-8")
 
-            with patch("dbsnp_liftover.core._run_tool", side_effect=fake_run_tool):
+            real_connect = sqlite3.connect
+            connections = []
+
+            def tracking_connect(*args, **kwargs):
+                connection = real_connect(*args, **kwargs)
+                connections.append(connection)
+                return connection
+
+            with patch("dbsnp_liftover.core._run_tool", side_effect=fake_run_tool), patch(
+                "dbsnp_liftover.core.sqlite3.connect", side_effect=tracking_connect
+            ):
                 summary = convert_bigbed_manifest(
                     manifest,
                     source_bigbed,
@@ -491,6 +551,10 @@ class LiftoverPipelineTests(unittest.TestCase):
                 )
 
                 self.assertEqual(summary, [("sample", 1, 1)])
+                self.assertEqual(len(connections), 5)
+                for connection in connections:
+                    with self.assertRaisesRegex(sqlite3.ProgrammingError, "closed database"):
+                        connection.execute("SELECT 1")
                 self.assertTrue((root / "indexes" / "source.sqlite").is_file())
                 self.assertTrue((root / "indexes" / "target.sqlite").is_file())
                 self.assertEqual(list(scratch.iterdir()), [])

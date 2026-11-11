@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import closing
 import csv
 import gzip
 import os
@@ -198,28 +199,32 @@ def build_index(vcf_path: Path, output_path: Path, assembly: str, release: str) 
 
 def _create_index(path: Path, assembly: str, release: str, source_path: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(str(path))
-    connection.executescript(
-        """
-        CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        CREATE TABLE variants (
-            chrom TEXT NOT NULL,
-            pos INTEGER NOT NULL,
-            rsid TEXT NOT NULL,
-            ref TEXT NOT NULL,
-            alt TEXT NOT NULL,
-            PRIMARY KEY (chrom, pos, rsid, ref, alt)
-        ) WITHOUT ROWID;
-        CREATE INDEX variants_by_rsid ON variants (rsid);
-        """
-    )
-    connection.executemany(
-        "INSERT INTO metadata(key, value) VALUES (?, ?)",
-        [
-            ("assembly", assembly),
-            ("release", release),
-            ("bigbed", str(source_path.resolve())),
-        ],
-    )
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE variants (
+                chrom TEXT NOT NULL,
+                pos INTEGER NOT NULL,
+                rsid TEXT NOT NULL,
+                ref TEXT NOT NULL,
+                alt TEXT NOT NULL,
+                PRIMARY KEY (chrom, pos, rsid, ref, alt)
+            ) WITHOUT ROWID;
+            CREATE INDEX variants_by_rsid ON variants (rsid);
+            """
+        )
+        connection.executemany(
+            "INSERT INTO metadata(key, value) VALUES (?, ?)",
+            [
+                ("assembly", assembly),
+                ("release", release),
+                ("bigbed", str(source_path.resolve())),
+            ],
+        )
+    except Exception:
+        connection.close()
+        raise
     return connection
 
 
@@ -429,7 +434,7 @@ def convert_bigbed_manifest(
         finally:
             source_db.close()
 
-        with sqlite3.connect(str(source_db_path)) as lookup:
+        with closing(sqlite3.connect(str(source_db_path))) as lookup:
             _configure_sqlite_mmap(lookup, sqlite_mmap_size)
             rsids = [
                 item[0]
@@ -924,8 +929,8 @@ def convert_manifest(
         input_paths.append(input_path)
 
     summaries = []
-    with sqlite3.connect(str(source_index_path)) as source_db, sqlite3.connect(
-        str(target_index_path)
+    with closing(sqlite3.connect(str(source_index_path))) as source_db, closing(
+        sqlite3.connect(str(target_index_path))
     ) as target_db:
         _configure_sqlite_mmap(source_db, sqlite_mmap_size)
         _configure_sqlite_mmap(target_db, sqlite_mmap_size)
