@@ -138,6 +138,31 @@ Typical status values include `mapped`, `mapped_flip`, `source_variant_not_found
 - This is dbSNP-mediated mapping, not a general chain-file liftover service. It does not normalize indels against a reference genome or infer mappings for variants absent from either snapshot.
 - Each VCF SQLite index or temporary BigBed lookup records its assembly and dbSNP release. Keep the original snapshots and record their checksums alongside the results for reproducibility.
 
+## Example results: FinnGen R10 periodontitis
+
+A FinnGen R10 periodontitis dataset was processed with dbSNP 155 to map 7,126,593 input rows from GRCh38 to GRCh37. A mapping was reported for 7,101,013 rows (99.641%); 25,580 rows (0.359%) did not receive an accepted mapping.
+
+The unresolved rows were classified as follows:
+
+| Mapping status | Rows | Interpretation |
+|---|---:|---|
+| `target_variant_not_found` | 23,813 | A matching target variant was not found in the target dbSNP snapshot. |
+| `target_ambiguous` | 926 | More than one compatible target match remained. |
+| `source_variant_not_found` | 838 | The source variant could not be matched in the source dbSNP snapshot. |
+| `source_ambiguous` | 3 | More than one source dbSNP record matched the input. |
+
+These statuses describe the outcome of the project's matching rules. An unresolved row is not necessarily an invalid variant; it means that this run did not establish a unique, acceptable mapping.
+
+The results are tab-separated tables with three complementary views:
+
+- **Row-level results** retain every input row and its original columns, then add mapping status, target variant and assembly information, and target-oriented effect fields. For example, target chromosome, position, REF, and ALT describe the GRCh37 mapping; effect alleles, BETA, and EAF are adjusted to the target allele orientation when required. Target mapping fields are blank when no mapping was accepted.
+- **Unique-variant results** contain one record per distinct input chromosome, position, and allele combination. Each record summarizes its mapping status and target information and has a stable variant identifier that can be used to connect it to the row-level results.
+- **Unresolved-row results** retain the original input data for rows without an accepted mapping, together with the status and any explanatory note. These records can be reviewed or handled separately without guessing target coordinates.
+
+The original input `BUILD` values indicated GRCh37, whereas the run configuration treated the source coordinates as GRCh38. Since original columns are preserved, interpret the conversion using the added liftover fields and their assembly labels rather than the input `BUILD` value.
+
+The run's validation report recorded successful gzip-integrity and row-preservation checks. These checks do not independently validate coordinates against a GRCh38 reference FASTA; that validation remains outstanding. The command also returned a non-zero exit code after a temporary-directory cleanup failure, despite the reported output checks passing.
+
 ## Tests
 
 ```bash
