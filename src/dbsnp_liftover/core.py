@@ -357,6 +357,7 @@ def convert_bigbed_manifest(
     compressed_output: bool = False,
     prefer_unique_primary: bool = False,
     allow_partial_source_rsids: bool = False,
+    include_non_primary: bool = True,
 ) -> List[Tuple[str, int, int]]:
     """Query BigBed by input coordinates and by rsID without materializing either file."""
     manifest_path = manifest_path.resolve()
@@ -482,6 +483,7 @@ def convert_bigbed_manifest(
             compressed_output=compressed_output,
             prefer_unique_primary=prefer_unique_primary,
             allow_partial_source_rsids=allow_partial_source_rsids,
+            include_non_primary=include_non_primary,
         )
 
 
@@ -693,6 +695,7 @@ def _find_target_variant(
     connection: sqlite3.Connection,
     source: Variant,
     prefer_unique_primary: bool = False,
+    include_non_primary: bool = True,
 ) -> Tuple[str, Optional[Variant], Optional[bool]]:
     rows = connection.execute(
         "SELECT chrom, pos, ref, alt FROM variants WHERE rsid = ?",
@@ -705,7 +708,14 @@ def _find_target_variant(
             candidates.add((chrom, pos, ref, alt, same_direction))
     if not candidates:
         return "target_variant_not_found", None, None
-    if prefer_unique_primary and len(candidates) > 1:
+    if not include_non_primary:
+        primary_candidates = {
+            candidate for candidate in candidates if is_primary_chromosome(candidate[0])
+        }
+        if not primary_candidates:
+            return "target_non_primary_only", None, None
+        candidates = primary_candidates
+    elif prefer_unique_primary and len(candidates) > 1:
         primary_candidates = {
             candidate for candidate in candidates if is_primary_chromosome(candidate[0])
         }
@@ -771,6 +781,7 @@ def _map_unique_variant(
     source_alt_value: str = "",
     prefer_unique_primary: bool = False,
     allow_partial_source_rsids: bool = False,
+    include_non_primary: bool = True,
 ) -> Dict[str, str]:
     result = {field: "" for field in OUTPUT_FIELDS}
     try:
@@ -798,7 +809,10 @@ def _map_unique_variant(
         source, effect_is_source_alt = source_candidates[0]
         result["LIFTOVER_RSID"] = source.rsid
         target_status, target, same_direction = _find_target_variant(
-            target_db, source, prefer_unique_primary
+            target_db,
+            source,
+            prefer_unique_primary=prefer_unique_primary,
+            include_non_primary=include_non_primary,
         )
         result["LIFTOVER_STATUS"] = target_status
         if target is None or same_direction is None:
@@ -815,13 +829,20 @@ def _map_unique_variant(
 
         resolved = []
         unmapped_source_rsids = []
+        non_primary_only_source_rsids = []
         ambiguous_target_rsids = []
         for source, effect_is_alt in source_candidates:
             target_status, target, same_direction = _find_target_variant(
-                target_db, source, prefer_unique_primary
+                target_db,
+                source,
+                prefer_unique_primary=prefer_unique_primary,
+                include_non_primary=include_non_primary,
             )
             if target_status == "target_variant_not_found":
                 unmapped_source_rsids.append(source.rsid)
+                continue
+            if target_status == "target_non_primary_only":
+                non_primary_only_source_rsids.append(source.rsid)
                 continue
             if target_status != "mapped" or target is None or same_direction is None:
                 ambiguous_target_rsids.append(source.rsid)
@@ -851,7 +872,10 @@ def _map_unique_variant(
         can_ignore_missing = (
             bool(resolved)
             and not ambiguous_target_rsids
-            and len(resolved) + len(unmapped_source_rsids) == len(source_candidates)
+            and len(resolved)
+            + len(unmapped_source_rsids)
+            + len(non_primary_only_source_rsids)
+            == len(source_candidates)
         )
         if (
             not resolved
@@ -872,6 +896,10 @@ def _map_unique_variant(
         if unmapped_source_rsids:
             note += "; no compatible target mapping for: {}".format(
                 ";".join(sorted(set(unmapped_source_rsids)))
+            )
+        if non_primary_only_source_rsids:
+            note += "; only non-primary target candidates excluded for: {}".format(
+                ";".join(sorted(set(non_primary_only_source_rsids)))
             )
         result["LIFTOVER_NOTE"] = note
 
@@ -901,6 +929,7 @@ def convert_manifest(
     compressed_output: bool = False,
     prefer_unique_primary: bool = False,
     allow_partial_source_rsids: bool = False,
+    include_non_primary: bool = True,
 ) -> List[Tuple[str, int, int]]:
     manifest_path = manifest_path.resolve()
     source_index_path = source_index_path.resolve()
@@ -1016,6 +1045,7 @@ def convert_manifest(
                             source_alt,
                             prefer_unique_primary,
                             allow_partial_source_rsids,
+                            include_non_primary,
                         )
                     source_rows[key].update(
                         {

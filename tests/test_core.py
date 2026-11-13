@@ -204,6 +204,58 @@ class LiftoverPipelineTests(unittest.TestCase):
             self.assertEqual(result["LIFTOVER_CHR"], "1")
             self.assertEqual(result["LIFTOVER_POS"], "8")
 
+            convert_manifest(
+                manifest,
+                source_db,
+                target_db,
+                root / "primary_only",
+                include_non_primary=False,
+            )
+            with (root / "primary_only" / "x.lifted.tsv").open(encoding="utf-8") as handle:
+                primary_only_result = next(csv.DictReader(handle, delimiter="\t"))
+            self.assertEqual(primary_only_result["LIFTOVER_STATUS"], "mapped")
+            self.assertEqual(primary_only_result["LIFTOVER_CHR"], "1")
+            self.assertEqual(primary_only_result["LIFTOVER_POS"], "8")
+
+    def test_primary_only_reports_when_only_non_primary_target_exists(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_vcf, target_vcf = root / "source.vcf", root / "target.vcf"
+            self._write_vcf(source_vcf, [["1", "5", "rs1", "A", "C", ".", ".", "."]])
+            self._write_vcf(
+                target_vcf,
+                [["1_KI270706V1_RANDOM", "8", "rs1", "A", "C", ".", ".", "."]],
+            )
+            source_db, target_db = root / "s.sqlite", root / "t.sqlite"
+            build_index(source_vcf, source_db, "buildA", "1")
+            build_index(target_vcf, target_db, "buildB", "1")
+            (root / "input.tsv").write_text(
+                "CHR\tPOS\tEA\tOA\tBETA\n1\t5\tC\tA\t0.2\n", encoding="utf-8"
+            )
+            manifest = root / "manifest.tsv"
+            manifest.write_text(
+                "sample_id\tpath\tchr\tpos\tea\toa\tbeta\n"
+                "x\tinput.tsv\tCHR\tPOS\tEA\tOA\tBETA\n",
+                encoding="utf-8",
+            )
+
+            convert_manifest(
+                manifest,
+                source_db,
+                target_db,
+                root / "primary_only",
+                include_non_primary=False,
+            )
+
+            with (root / "primary_only" / "x.lifted.tsv").open(encoding="utf-8") as handle:
+                result = next(csv.DictReader(handle, delimiter="\t"))
+            self.assertEqual(result["LIFTOVER_STATUS"], "target_non_primary_only")
+            self.assertEqual(result["LIFTOVER_CHR"], "")
+            with (root / "primary_only" / "x.unmapped.tsv").open(encoding="utf-8") as handle:
+                unmapped = list(csv.DictReader(handle, delimiter="\t"))
+            self.assertEqual(len(unmapped), 1)
+            self.assertEqual(unmapped[0]["LIFTOVER_STATUS"], "target_non_primary_only")
+
     def test_source_rsids_are_merged_when_target_mapping_and_direction_agree(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

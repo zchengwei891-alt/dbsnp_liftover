@@ -50,6 +50,13 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="allow consistent mapped source rsIDs when other candidates have no compatible target mapping",
     )
+    convert.add_argument(
+        "--primary-only",
+        action="store_false",
+        dest="include_non_primary",
+        default=True,
+        help="exclude non-primary target chromosomes (included by default)",
+    )
 
     bigbed = commands.add_parser(
         "convert-bigbed",
@@ -98,6 +105,13 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="allow consistent mapped source rsIDs when other candidates have no compatible target mapping",
     )
+    bigbed.add_argument(
+        "--primary-only",
+        action="store_false",
+        dest="include_non_primary",
+        default=True,
+        help="exclude non-primary target chromosomes (included by default)",
+    )
     bigbed.add_argument("--bigbed-to-bed", default="bigBedToBed")
     bigbed.add_argument("--bigbed-named-items", default="bigBedNamedItems")
     return parser
@@ -124,6 +138,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 compressed_output=args.compress_output,
                 prefer_unique_primary=args.prefer_unique_primary,
                 allow_partial_source_rsids=args.allow_partial_source_rsids,
+                include_non_primary=args.include_non_primary,
             )
         elif args.command == "convert-bigbed":
             summaries = convert_bigbed_manifest(
@@ -143,6 +158,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 args.compress_output,
                 args.prefer_unique_primary,
                 args.allow_partial_source_rsids,
+                include_non_primary=args.include_non_primary,
             )
         else:
             raise LiftoverError("unknown command: {}".format(args.command))
