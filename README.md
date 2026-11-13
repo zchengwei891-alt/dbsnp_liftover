@@ -2,6 +2,8 @@
 
 A standalone, dependency-free Python project for mapping GWAS summary-statistic variants between dbSNP assembly snapshots. The same workflow supports any source/target dbSNP releases for which matching assembly snapshots are available; GRCh38-to-GRCh37 with dbSNP155 is one such configuration, not a hard-coded path.
 
+![Abstract picture](assets/Abstract.png)
+
 The workflow matches input chromosome, one-based position, and source REF/ALT alleles against the source dbSNP snapshot to obtain the dbSNP rsID. It then uses that retrieved rsID—not any rsID carried by the input GWAS file—to find the matching target record and checks the alleles. It never silently chooses among ambiguous matches.
 
 ## Requirements
