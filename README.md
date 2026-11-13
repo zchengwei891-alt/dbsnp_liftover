@@ -167,6 +167,10 @@ The original input `BUILD` values indicated GRCh37, whereas the run configuratio
 
 The run's validation report recorded successful gzip-integrity and row-preservation checks. These checks do not independently validate coordinates against a GRCh38 reference FASTA; that validation remains outstanding. The command also returned a non-zero exit code after a temporary-directory cleanup failure, despite the reported output checks passing.
 
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for the full text.
+
 ## Tests
 
 ```bash

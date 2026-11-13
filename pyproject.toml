@@ -7,6 +7,7 @@ name = "dbsnp-liftover"
 version = "0.1.0"
 description = "GWAS variant coordinate mapping between dbSNP assembly snapshots"
 readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.9"
 dependencies = []
 
