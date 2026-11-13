@@ -54,8 +54,8 @@ Run the command from an environment where the UCSC BigBed tools are installed (f
 conda run -n gwas_env python -m pip install -e /media/lenovo/F/ZCW/DATABASE/PDAC/GWAS/dbsnp_liftover
 conda run -n gwas_env dbsnp-liftover convert-bigbed \
   --manifest /path/to/manifest.tsv \
-  --source-bigbed /media/lenovo/G/ZCW/DATABASE/GWAS/dbSNP155/GRCh38/dbSnp155.hg38.bb \
-  --target-bigbed /media/lenovo/G/ZCW/DATABASE/GWAS/dbSNP155/GRCh37/dbSnp155.hg19.bb \
+  --source-bigbed /path/to/GRCh38/dbSnp155.hg38.bb \
+  --target-bigbed /path/to/GRCh37/dbSnp155.hg19.bb \
   --source-assembly GRCh38 --source-release 155 \
   --target-assembly GRCh37   --target-release 155
 ```
@@ -81,8 +81,8 @@ If the package is already installed in the active shell:
 ```bash
 dbsnp-liftover convert-bigbed \
   --manifest /path/to/manifest.tsv \
-  --source-bigbed /media/lenovo/G/ZCW/DATABASE/GWAS/dbSNP155/GRCh38/dbSnp155.hg38.bb \
-  --target-bigbed /media/lenovo/G/ZCW/DATABASE/GWAS/dbSNP155/GRCh37/dbSnp155.hg19.bb \
+  --source-bigbed /path/to/GRCh38/dbSnp155.hg38.bb \
+  --target-bigbed /path/to/GRCh37/dbSnp155.hg19.bb \
   --source-assembly GRCh38 --source-release 155 \
   --target-assembly GRCh37 --target-release 155 \
   --output-dir /path/to/default_lifted
